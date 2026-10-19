@@ -1,0 +1,86 @@
+import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { PageHeader, DataTable, StatusBadge, PriorityBadge, FilterGroup, FilterChip } from "@/dashboard/components";
+import type { Column } from "@/dashboard/components";
+import { useDashboardData, useDashboardSession } from "@/dashboard/state/DashboardProvider";
+import { getEquipmentById, getMdQueue, getSupervisorQueue, formatDate } from "@/dashboard/data/selectors";
+import type { Priority, RepairRequest } from "@/dashboard/types";
+
+const PRIORITY_OPTIONS: Array<Priority | "All"> = ["All", "Critical", "High", "Medium", "Low"];
+
+export default function ApprovalQueue() {
+  const navigate = useNavigate();
+  const { user } = useDashboardSession();
+  const { equipment, repairRequests } = useDashboardData();
+  const [priority, setPriority] = useState<Priority | "All">("All");
+  const [site, setSite] = useState<string | "All">("All");
+
+  const baseQueue = useMemo(() => {
+    if (!user) return [];
+    return user.role === "md" ? getMdQueue(repairRequests) : getSupervisorQueue(repairRequests, user.id);
+  }, [user, repairRequests]);
+
+  const sites = useMemo(() => Array.from(new Set(equipment.map((eq) => eq.site))), [equipment]);
+
+  const filtered = useMemo(() => {
+    return baseQueue.filter((rr) => {
+      const eq = getEquipmentById(equipment, rr.equipmentId);
+      const matchesPriority = priority === "All" || rr.priority === priority;
+      const matchesSite = site === "All" || eq?.site === site;
+      return matchesPriority && matchesSite;
+    });
+  }, [baseQueue, equipment, priority, site]);
+
+  if (!user) return null;
+
+  const columns: Column<RepairRequest>[] = [
+    { header: "Request ID", cell: (rr) => <span className="font-semibold">{rr.id}</span> },
+    { header: "Equipment", cell: (rr) => getEquipmentById(equipment, rr.equipmentId)?.name ?? "—" },
+    { header: "Site", cell: (rr) => getEquipmentById(equipment, rr.equipmentId)?.site ?? "—" },
+    { header: "Fault Type", cell: (rr) => rr.faultType },
+    { header: "Priority", cell: (rr) => <PriorityBadge priority={rr.priority} /> },
+    { header: "Status", cell: (rr) => <StatusBadge status={rr.status} /> },
+    { header: "Reported", cell: (rr) => formatDate(rr.reportedAt) },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        title="Approval Queue"
+        description={
+          user.role === "md"
+            ? "Requests awaiting your final approval."
+            : "Requests routed to you for first-stage approval."
+        }
+      />
+
+      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+        <FilterGroup label="Priority">
+          {PRIORITY_OPTIONS.map((p) => (
+            <FilterChip key={p} active={priority === p} onClick={() => setPriority(p)}>
+              {p}
+            </FilterChip>
+          ))}
+        </FilterGroup>
+        <FilterGroup label="Site">
+          <FilterChip active={site === "All"} onClick={() => setSite("All")}>
+            All
+          </FilterChip>
+          {sites.map((s) => (
+            <FilterChip key={s} active={site === s} onClick={() => setSite(s)}>
+              {s}
+            </FilterChip>
+          ))}
+        </FilterGroup>
+      </div>
+
+      <DataTable
+        columns={columns}
+        rows={filtered}
+        getRowKey={(rr) => rr.id}
+        onRowClick={(rr) => navigate(`/dashboard/repair-requests/${rr.id}`)}
+        emptyMessage="Nothing in your queue right now."
+      />
+    </div>
+  );
+}
