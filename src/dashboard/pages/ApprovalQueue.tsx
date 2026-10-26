@@ -1,46 +1,49 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { PageHeader, DataTable, StatusBadge, PriorityBadge, FilterGroup, FilterChip } from "@/dashboard/components";
+import { PageHeader, DataTable, StatusBadge, PriorityBadge, FilterGroup, FilterChip, EmptyState } from "@/dashboard/components";
 import type { Column } from "@/dashboard/components";
 import { useDashboardData, useDashboardSession } from "@/dashboard/state/DashboardProvider";
-import { getEquipmentById, getMdQueue, getSupervisorQueue, formatDate } from "@/dashboard/data/selectors";
+import { getEquipmentById, formatDate } from "@/dashboard/data/selectors";
+import { FAULT_TYPE_LABEL, PRIORITY_LABEL } from "@/dashboard/data/labels";
 import type { Priority, RepairRequest } from "@/dashboard/types";
 
-const PRIORITY_OPTIONS: Array<Priority | "All"> = ["All", "Critical", "High", "Medium", "Low"];
+const PRIORITY_OPTIONS: Array<Priority | "All"> = ["All", "critical", "high", "medium", "low"];
 
 export default function ApprovalQueue() {
   const navigate = useNavigate();
   const { user } = useDashboardSession();
-  const { equipment, repairRequests } = useDashboardData();
+  const { equipment, approvalQueue, approvalQueueLoading, refreshApprovalQueue } = useDashboardData();
   const [priority, setPriority] = useState<Priority | "All">("All");
   const [site, setSite] = useState<string | "All">("All");
 
-  const baseQueue = useMemo(() => {
-    if (!user) return [];
-    return user.role === "md" ? getMdQueue(repairRequests) : getSupervisorQueue(repairRequests, user.id);
-  }, [user, repairRequests]);
+  useEffect(() => {
+    refreshApprovalQueue();
+  }, [refreshApprovalQueue]);
 
-  const sites = useMemo(() => Array.from(new Set(equipment.map((eq) => eq.site))), [equipment]);
+  const sites = useMemo(
+    () => Array.from(new Set(equipment.map((eq) => eq.assignedSite).filter((s): s is string => Boolean(s)))),
+    [equipment],
+  );
 
   const filtered = useMemo(() => {
-    return baseQueue.filter((rr) => {
+    return approvalQueue.filter((rr) => {
       const eq = getEquipmentById(equipment, rr.equipmentId);
       const matchesPriority = priority === "All" || rr.priority === priority;
-      const matchesSite = site === "All" || eq?.site === site;
+      const matchesSite = site === "All" || eq?.assignedSite === site;
       return matchesPriority && matchesSite;
     });
-  }, [baseQueue, equipment, priority, site]);
+  }, [approvalQueue, equipment, priority, site]);
 
   if (!user) return null;
 
   const columns: Column<RepairRequest>[] = [
-    { header: "Request ID", cell: (rr) => <span className="font-semibold">{rr.id}</span> },
+    { header: "Request ID", cell: (rr) => <span className="font-semibold">{rr.requestNumber}</span> },
     { header: "Equipment", cell: (rr) => getEquipmentById(equipment, rr.equipmentId)?.name ?? "—" },
-    { header: "Site", cell: (rr) => getEquipmentById(equipment, rr.equipmentId)?.site ?? "—" },
-    { header: "Fault Type", cell: (rr) => rr.faultType },
+    { header: "Site", cell: (rr) => getEquipmentById(equipment, rr.equipmentId)?.assignedSite ?? "—" },
+    { header: "Fault Type", cell: (rr) => FAULT_TYPE_LABEL[rr.faultType] },
     { header: "Priority", cell: (rr) => <PriorityBadge priority={rr.priority} /> },
     { header: "Status", cell: (rr) => <StatusBadge status={rr.status} /> },
-    { header: "Reported", cell: (rr) => formatDate(rr.reportedAt) },
+    { header: "Reported", cell: (rr) => formatDate(rr.faultDatetime) },
   ];
 
   return (
@@ -58,7 +61,7 @@ export default function ApprovalQueue() {
         <FilterGroup label="Priority">
           {PRIORITY_OPTIONS.map((p) => (
             <FilterChip key={p} active={priority === p} onClick={() => setPriority(p)}>
-              {p}
+              {p === "All" ? "All" : PRIORITY_LABEL[p]}
             </FilterChip>
           ))}
         </FilterGroup>
@@ -74,13 +77,17 @@ export default function ApprovalQueue() {
         </FilterGroup>
       </div>
 
-      <DataTable
-        columns={columns}
-        rows={filtered}
-        getRowKey={(rr) => rr.id}
-        onRowClick={(rr) => navigate(`/dashboard/repair-requests/${rr.id}`)}
-        emptyMessage="Nothing in your queue right now."
-      />
+      {approvalQueueLoading && approvalQueue.length === 0 ? (
+        <EmptyState message="Loading your approval queue…" />
+      ) : (
+        <DataTable
+          columns={columns}
+          rows={filtered}
+          getRowKey={(rr) => rr.id}
+          onRowClick={(rr) => navigate(`/dashboard/repair-requests/${rr.id}`)}
+          emptyMessage="Nothing in your queue right now."
+        />
+      )}
     </div>
   );
 }

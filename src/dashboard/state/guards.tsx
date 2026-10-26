@@ -4,9 +4,15 @@ import { useDashboardSession } from "./DashboardProvider";
 import { EmptyState } from "@/dashboard/components";
 import type { Role } from "@/dashboard/types";
 
-/** Gates every /dashboard/* screen behind a mocked session. */
+/**
+ * Gates every /dashboard/* screen behind a real session. While the app is
+ * still checking a stored refresh token (authReady === false), it renders
+ * nothing rather than bouncing straight to /login — otherwise a page reload
+ * would flash the login screen for a moment even when the session is valid.
+ */
 export function RequireAuth({ children }: { children: ReactNode }) {
-  const { user } = useDashboardSession();
+  const { user, authReady } = useDashboardSession();
+  if (!authReady) return null;
   if (!user) return <Navigate to="/dashboard/login" replace />;
   return <>{children}</>;
 }

@@ -3,18 +3,12 @@ import type { FormEvent, ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui";
 import { PageHeader } from "@/dashboard/components";
-import {
-  useDashboardData,
-  useDashboardSession,
-} from "@/dashboard/state/DashboardProvider";
+import { useDashboardData, useDashboardSession } from "@/dashboard/state/DashboardProvider";
+import { FAULT_TYPE_LABEL, PRIORITY_LABEL } from "@/dashboard/data/labels";
 import type { FaultType, Priority } from "@/dashboard/types";
 
-const FAULT_TYPES: FaultType[] = [
-  "Corrective Maintenance",
-  "Preventive Maintenance",
-  "Emergency Repair",
-];
-const PRIORITIES: Priority[] = ["Low", "Medium", "High", "Critical"];
+const FAULT_TYPES: FaultType[] = ["corrective_maintenance", "preventive_maintenance", "emergency_repair"];
+const PRIORITIES: Priority[] = ["low", "medium", "high", "critical"];
 
 function nowForInput(): string {
   const now = new Date();
@@ -25,84 +19,73 @@ function nowForInput(): string {
 export default function ReportFault() {
   const navigate = useNavigate();
   const { user } = useDashboardSession();
-  const { equipment, submitFaultReport } = useDashboardData();
+  const { equipment, equipmentLoading, submitFaultReport } = useDashboardData();
 
   const [equipmentId, setEquipmentId] = useState(equipment[0]?.id ?? "");
-  const [faultType, setFaultType] = useState<FaultType>(
-    "Corrective Maintenance",
-  );
-  const [priority, setPriority] = useState<Priority>("Medium");
-  const [reportedAt, setReportedAt] = useState(nowForInput());
+  const [faultType, setFaultType] = useState<FaultType>("corrective_maintenance");
+  const [priority, setPriority] = useState<Priority>("medium");
+  const [faultDatetime, setFaultDatetime] = useState(nowForInput());
   const [description, setDescription] = useState("");
-  const [detectedBy, setDetectedBy] = useState(user?.name ?? "");
+  const [detectedBy, setDetectedBy] = useState("");
   const [recommendation, setRecommendation] = useState("");
   const [estimatedCost, setEstimatedCost] = useState("");
-  const [attachmentName, setAttachmentName] = useState<string | null>(null);
+  const [submitImmediately, setSubmitImmediately] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const selectedEquipment = equipment.find((eq) => eq.id === equipmentId);
 
   if (!user) return null;
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!user) return;
 
     if (!equipmentId) {
       setError("Select the equipment this fault affects.");
       return;
     }
-    if (!description.trim()) {
-      setError("Describe the fault before submitting.");
-      return;
-    }
-    if (!recommendation.trim()) {
-      setError("Add a repair recommendation for the supervisor to review.");
+    if (!description.trim() || description.trim().length < 3) {
+      setError("Describe the fault (at least 3 characters) before submitting.");
       return;
     }
 
     setError(null);
+    setSubmitting(true);
 
-    const request = submitFaultReport(
-      {
-        equipmentId,
-        faultType,
-        priority,
-        faultDescription: description.trim(),
-        faultDetectedBy: detectedBy,
-        repairRecommendation: recommendation.trim(),
-        reportedAt: new Date(reportedAt).toISOString(),
-        estimatedCost: estimatedCost.trim() ? Number(estimatedCost) : undefined,
-      },
-      user,
-    );
-
-    navigate(`/dashboard/repair-requests/${request.id}`, {
-      state: { justSubmitted: true },
+    const result = await submitFaultReport({
+      equipmentId,
+      faultDatetime: new Date(faultDatetime).toISOString(),
+      faultType,
+      priority,
+      faultDescription: description.trim(),
+      faultDetectedBy: detectedBy.trim() || undefined,
+      repairRecommendation: recommendation.trim() || undefined,
+      estimatedCost: estimatedCost.trim() ? Number(estimatedCost) : undefined,
+      submitImmediately,
     });
+
+    setSubmitting(false);
+
+    if ("error" in result) {
+      setError(result.error);
+      return;
+    }
+
+    navigate(`/dashboard/repair-requests/${result.id}`, { state: { justSubmitted: true } });
   }
 
   return (
     <div className="max-w-3xl space-y-6">
-      <PageHeader
-        title="Report Equipment Fault"
-        description="Submit a new fault report for supervisor review."
-      />
+      <PageHeader title="Report Equipment Fault" description="Submit a new fault report for supervisor review." />
 
-      <form
-        onSubmit={handleSubmit}
-        noValidate
-        className="space-y-6 rounded-lg border border-black/5 bg-white p-6 shadow-sm"
-      >
+      <form onSubmit={handleSubmit} noValidate className="space-y-6 rounded-lg border border-black/5 bg-white p-6 shadow-sm">
         <Field label="Equipment">
-          <select
-            value={equipmentId}
-            onChange={(e) => setEquipmentId(e.target.value)}
-            className={selectClass}
-          >
+          <select value={equipmentId} onChange={(e) => setEquipmentId(e.target.value)} className={selectClass} disabled={equipmentLoading}>
+            <option value="">{equipmentLoading ? "Loading equipment…" : "Select equipment"}</option>
             {equipment.map((eq) => (
               <option key={eq.id} value={eq.id}>
-                {eq.name} · {eq.site}
+                {eq.name}
+                {eq.assignedSite ? ` · ${eq.assignedSite}` : ""}
               </option>
             ))}
           </select>
@@ -110,94 +93,50 @@ export default function ReportFault() {
 
         {selectedEquipment && (
           <div className="grid grid-cols-2 gap-4 rounded-md bg-surface/60 p-4 sm:grid-cols-4">
-            <ReadOnly
-              label="Registration No."
-              value={selectedEquipment.registrationNumber}
-            />
-            <ReadOnly
-              label="Serial No."
-              value={selectedEquipment.serialNumber}
-            />
-            <ReadOnly label="Model No." value={selectedEquipment.modelNumber} />
-            <ReadOnly
-              label="Location / Site"
-              value={`${selectedEquipment.location}`}
-            />
+            <ReadOnly label="Registration No." value={selectedEquipment.registrationNumber} />
+            <ReadOnly label="Serial No." value={selectedEquipment.serialNumber ?? "—"} />
+            <ReadOnly label="Model No." value={selectedEquipment.modelNumber ?? "—"} />
+            <ReadOnly label="Location / Site" value={selectedEquipment.currentLocation ?? selectedEquipment.assignedSite ?? "—"} />
           </div>
         )}
 
         <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
           <Field label="Date / Time of Fault">
-            <input
-              type="datetime-local"
-              value={reportedAt}
-              onChange={(e) => setReportedAt(e.target.value)}
-              className={inputClass}
-            />
+            <input type="datetime-local" value={faultDatetime} onChange={(e) => setFaultDatetime(e.target.value)} className={inputClass} />
           </Field>
 
           <Field label="Fault Type">
-            <select
-              value={faultType}
-              onChange={(e) => setFaultType(e.target.value as FaultType)}
-              className={selectClass}
-            >
+            <select value={faultType} onChange={(e) => setFaultType(e.target.value as FaultType)} className={selectClass}>
               {FAULT_TYPES.map((type) => (
                 <option key={type} value={type}>
-                  {type}
+                  {FAULT_TYPE_LABEL[type]}
                 </option>
               ))}
             </select>
           </Field>
 
           <Field label="Priority">
-            <select
-              value={priority}
-              onChange={(e) => setPriority(e.target.value as Priority)}
-              className={selectClass}
-            >
+            <select value={priority} onChange={(e) => setPriority(e.target.value as Priority)} className={selectClass}>
               {PRIORITIES.map((p) => (
                 <option key={p} value={p}>
-                  {p}
+                  {PRIORITY_LABEL[p]}
                 </option>
               ))}
             </select>
           </Field>
 
           <Field label="Fault Reported By">
-            <input
-              type="text"
-              value={user.name}
-              disabled
-              className={`${inputClass} bg-surface text-muted`}
-            />
+            <input type="text" value={user.fullName} disabled className={`${inputClass} bg-surface text-muted`} />
           </Field>
 
-          <Field label="Fault Detected By">
+          <Field label="Fault Detected By (optional)">
             <input
               type="text"
               value={detectedBy}
               onChange={(e) => setDetectedBy(e.target.value)}
-              placeholder={user.name}
+              placeholder={user.fullName}
               className={inputClass}
             />
-          </Field>
-
-          <Field label="Photo / Video Attachment">
-            <input
-              type="file"
-              accept="image/*,video/*"
-              onChange={(e) =>
-                setAttachmentName(e.target.files?.[0]?.name ?? null)
-              }
-              className="w-full rounded-md border border-black/10 bg-white px-3 py-2 text-sm text-ink file:mr-3 file:rounded-md file:border-0 file:bg-surface file:px-3 file:py-1.5 file:text-sm file:font-medium"
-            />
-            {attachmentName && (
-              <p className="mt-1 text-xs text-muted">
-                Attached: {attachmentName} (stored once file uploads are
-                connected)
-              </p>
-            )}
           </Field>
         </div>
 
@@ -211,7 +150,7 @@ export default function ReportFault() {
           />
         </Field>
 
-        <Field label="Repair Recommendation">
+        <Field label="Repair Recommendation (optional)">
           <textarea
             value={recommendation}
             onChange={(e) => setRecommendation(e.target.value)}
@@ -221,7 +160,7 @@ export default function ReportFault() {
           />
         </Field>
 
-        <Field label="Estimated Repair Cost (₦)">
+        <Field label="Estimated Repair Cost (₦) (optional)">
           <input
             type="number"
             min="0"
@@ -229,24 +168,24 @@ export default function ReportFault() {
             inputMode="numeric"
             value={estimatedCost}
             onChange={(e) => setEstimatedCost(e.target.value)}
-            placeholder="Optional — your best guess, for approval review"
+            placeholder="Your best guess, for approval review"
             className={inputClass}
           />
         </Field>
 
+        <label className="flex items-center gap-2 text-sm text-ink">
+          <input type="checkbox" checked={submitImmediately} onChange={(e) => setSubmitImmediately(e.target.checked)} className="h-4 w-4" />
+          Submit immediately for supervisor approval (leave unchecked to save as a draft instead)
+        </label>
+
         {error && <p className="text-sm font-medium text-red-600">{error}</p>}
 
         <div className="flex justify-end gap-2">
-          <Button
-            type="button"
-            variant="secondary"
-            className="border border-ink/10"
-            onClick={() => navigate(-1)}
-          >
+          <Button type="button" variant="secondary" className="border border-ink/10" onClick={() => navigate(-1)} disabled={submitting}>
             Cancel
           </Button>
-          <Button type="submit" size="lg">
-            Submit for Approval
+          <Button type="submit" size="lg" disabled={submitting}>
+            {submitting ? "Submitting…" : submitImmediately ? "Submit for Approval" : "Save as Draft"}
           </Button>
         </div>
       </form>
@@ -261,9 +200,7 @@ const selectClass = inputClass;
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="block">
-      <span className="mb-1.5 block text-sm font-semibold text-ink">
-        {label}
-      </span>
+      <span className="mb-1.5 block text-sm font-semibold text-ink">{label}</span>
       {children}
     </label>
   );
@@ -272,9 +209,7 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 function ReadOnly({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <p className="text-xs font-medium tracking-wide text-muted uppercase">
-        {label}
-      </p>
+      <p className="text-xs font-medium tracking-wide text-muted uppercase">{label}</p>
       <p className="mt-0.5 text-sm font-medium text-ink">{value}</p>
     </div>
   );

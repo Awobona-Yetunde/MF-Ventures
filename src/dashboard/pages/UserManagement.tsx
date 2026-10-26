@@ -1,17 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { PageHeader, DataTable } from "@/dashboard/components";
 import type { Column } from "@/dashboard/components";
 import { Button, Modal } from "@/components/ui";
-import { useDashboardData } from "@/dashboard/state/DashboardProvider";
+import { useDashboardData, getErrorMessage } from "@/dashboard/state/DashboardProvider";
+import { ROLE_LABEL } from "@/dashboard/data/labels";
+import { getInitials } from "@/dashboard/data/selectors";
 import type { Role, User } from "@/dashboard/types";
-
-const ROLE_LABEL: Record<Role, string> = {
-  mechanic: "Mechanic",
-  supervisor: "Supervisor",
-  md: "Managing Director",
-  admin: "Administrator",
-};
 
 const ROLE_BADGE: Record<Role, string> = {
   mechanic: "bg-blue-50 text-blue-700",
@@ -22,23 +17,39 @@ const ROLE_BADGE: Record<Role, string> = {
 
 const ROLE_OPTIONS: Role[] = ["mechanic", "supervisor", "md", "admin"];
 
-const SITE_OPTIONS = ["Lagos", "Warri", "Port Harcourt"];
-
 interface NewUserForm {
-  name: string;
+  fullName: string;
   email: string;
+  phoneNumber: string;
   role: Role;
   site: string;
 }
 
-const EMPTY_FORM: NewUserForm = { name: "", email: "", role: "mechanic", site: SITE_OPTIONS[0] };
+const EMPTY_FORM: NewUserForm = { fullName: "", email: "", phoneNumber: "", role: "mechanic", site: "" };
+
+/** Generates a random 14-character password satisfying the backend's 8–128 char requirement. */
+function generateTemporaryPassword(): string {
+  const charset = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%";
+  const bytes = new Uint32Array(14);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (n) => charset[n % charset.length]).join("");
+}
 
 export default function UserManagement() {
-  const { users, addUser } = useDashboardData();
+  const { users, usersLoading, refreshUsers, addUser } = useDashboardData();
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [form, setForm] = useState<NewUserForm>(EMPTY_FORM);
   const [formError, setFormError] = useState<string | null>(null);
-  const [lastInvite, setLastInvite] = useState<{ user: User; inviteLink: string } | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [lastCreated, setLastCreated] = useState<{ user: User; password: string } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  // Each visit to this page fetches the current list itself, rather than
+  // only relying on the one fetch that ran right after login.
+  useEffect(() => {
+    setLoadError(null);
+    refreshUsers().catch((err) => setLoadError(getErrorMessage(err)));
+  }, [refreshUsers]);
 
   const columns: Column<User>[] = [
     {
@@ -46,9 +57,9 @@ export default function UserManagement() {
       cell: (u) => (
         <div className="flex items-center gap-3">
           <span className="flex h-8 w-8 items-center justify-center rounded-full bg-brand-blue/10 text-xs font-semibold text-brand-blue">
-            {u.avatarInitials}
+            {getInitials(u.fullName)}
           </span>
-          <span className="font-semibold">{u.name}</span>
+          <span className="font-semibold">{u.fullName}</span>
         </div>
       ),
     },
@@ -56,23 +67,17 @@ export default function UserManagement() {
     {
       header: "Role",
       cell: (u) => (
-        <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${ROLE_BADGE[u.role]}`}>
-          {ROLE_LABEL[u.role]}
-        </span>
+        <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${ROLE_BADGE[u.role]}`}>{ROLE_LABEL[u.role]}</span>
       ),
     },
-    { header: "Site", cell: (u) => u.site },
+    { header: "Site", cell: (u) => u.site ?? "—" },
     {
       header: "Status",
       cell: (u) =>
-        u.status === "Active" ? (
-          <span className="inline-flex rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
-            Active
-          </span>
+        u.isActive ? (
+          <span className="inline-flex rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">Active</span>
         ) : (
-          <span className="inline-flex rounded-full bg-surface px-2.5 py-1 text-xs font-semibold text-muted">
-            Invited — pending setup
-          </span>
+          <span className="inline-flex rounded-full bg-surface px-2.5 py-1 text-xs font-semibold text-muted">Deactivated</span>
         ),
     },
   ];
@@ -83,13 +88,28 @@ export default function UserManagement() {
     setIsAddOpen(true);
   }
 
-  function handleSendInvite() {
-    const result = addUser(form);
+  async function handleCreateUser() {
+    if (!form.fullName.trim() || !form.email.trim()) {
+      setFormError("Full name and email are required.");
+      return;
+    }
+    setSubmitting(true);
+    const password = generateTemporaryPassword();
+    const result = await addUser({
+      fullName: form.fullName.trim(),
+      email: form.email.trim(),
+      phoneNumber: form.phoneNumber.trim() || undefined,
+      site: form.site.trim() || undefined,
+      role: form.role,
+      password,
+    });
+    setSubmitting(false);
+
     if ("error" in result) {
       setFormError(result.error);
       return;
     }
-    setLastInvite(result);
+    setLastCreated({ user: result, password });
     setIsAddOpen(false);
   }
 
@@ -98,54 +118,77 @@ export default function UserManagement() {
       <PageHeader
         title="User Management"
         description="Manage staff accounts and role-based access."
-        actions={<Button size="md" onClick={openAddModal}>+ Add User</Button>}
+        actions={
+          <Button size="md" onClick={openAddModal}>
+            + Add User
+          </Button>
+        }
       />
 
-      {lastInvite ? (
+      {lastCreated ? (
         <div className="flex flex-col gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="text-sm font-semibold text-emerald-900">
-              Invite created for {lastInvite.user.name} ({ROLE_LABEL[lastInvite.user.role]})
+              Account created for {lastCreated.user.fullName} ({ROLE_LABEL[lastCreated.user.role]})
             </p>
             <p className="mt-1 text-sm text-emerald-800">
-              Once this is connected to email, the invite link below is sent to{" "}
-              <span className="font-medium">{lastInvite.user.email}</span> automatically. For now, copy and share it
-              yourself — the user opens it to set their own password.
+              Share this temporary password with <span className="font-medium">{lastCreated.user.email}</span> directly —
+              there is no invite email or password-change flow yet, so they will sign in with it as-is. Ask them to keep it
+              somewhere safe.
             </p>
-            <code className="mt-2 block truncate rounded bg-white px-3 py-1.5 text-xs text-ink">
-              {lastInvite.inviteLink}
-            </code>
+            <code className="mt-2 block truncate rounded bg-white px-3 py-1.5 text-xs text-ink">{lastCreated.password}</code>
           </div>
           <div className="flex shrink-0 gap-2">
             <Button
               variant="secondary"
               size="md"
               className="border border-emerald-300"
-              onClick={() => navigator.clipboard?.writeText(lastInvite.inviteLink)}
+              onClick={() => navigator.clipboard?.writeText(lastCreated.password)}
             >
-              Copy Link
+              Copy Password
             </Button>
-            <Button variant="secondary" size="md" className="border border-emerald-300" onClick={() => setLastInvite(null)}>
+            <Button variant="secondary" size="md" className="border border-emerald-300" onClick={() => setLastCreated(null)}>
               Dismiss
             </Button>
           </div>
         </div>
       ) : null}
 
-      <DataTable columns={columns} rows={users} getRowKey={(u) => u.id} />
+      {loadError && (
+        <div className="flex flex-col gap-3 rounded-md border border-red-200 bg-red-50 p-4 text-sm font-medium text-red-700 sm:flex-row sm:items-center sm:justify-between">
+          <span>{loadError}</span>
+          <Button
+            variant="secondary"
+            size="md"
+            className="border border-red-300"
+            onClick={() => {
+              setLoadError(null);
+              refreshUsers().catch((err) => setLoadError(getErrorMessage(err)));
+            }}
+          >
+            Retry
+          </Button>
+        </div>
+      )}
+
+      {usersLoading && users.length === 0 ? (
+        <p className="text-sm text-muted">Loading users…</p>
+      ) : (
+        <DataTable columns={columns} rows={users} getRowKey={(u) => u.id} emptyMessage="No users to show." />
+      )}
 
       <Modal
         open={isAddOpen}
         onClose={() => setIsAddOpen(false)}
         title="Add User"
-        description="Creates the account and generates an invite link so the person can set their own password. Nobody's password is ever created or seen by an admin."
+        description="Creates the account with a randomly generated temporary password, shown to you once after creation to pass on to the new user."
       >
         <div className="space-y-4">
           <Field label="Full Name">
             <input
               type="text"
-              value={form.name}
-              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+              value={form.fullName}
+              onChange={(e) => setForm((f) => ({ ...f, fullName: e.target.value }))}
               className="w-full rounded-md border border-black/10 px-3 py-2 text-sm text-ink focus:border-brand-blue focus:outline-none"
               placeholder="e.g. Ifeoma Chukwu"
               autoComplete="off"
@@ -159,6 +202,17 @@ export default function UserManagement() {
               onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
               className="w-full rounded-md border border-black/10 px-3 py-2 text-sm text-ink focus:border-brand-blue focus:outline-none"
               placeholder="name@mfventures.com"
+              autoComplete="off"
+            />
+          </Field>
+
+          <Field label="Phone Number (optional)">
+            <input
+              type="tel"
+              value={form.phoneNumber}
+              onChange={(e) => setForm((f) => ({ ...f, phoneNumber: e.target.value }))}
+              className="w-full rounded-md border border-black/10 px-3 py-2 text-sm text-ink focus:border-brand-blue focus:outline-none"
+              placeholder="e.g. 08012345678"
               autoComplete="off"
             />
           </Field>
@@ -177,18 +231,14 @@ export default function UserManagement() {
             </select>
           </Field>
 
-          <Field label="Site">
-            <select
+          <Field label="Site (optional)">
+            <input
+              type="text"
               value={form.site}
               onChange={(e) => setForm((f) => ({ ...f, site: e.target.value }))}
               className="w-full rounded-md border border-black/10 px-3 py-2 text-sm text-ink focus:border-brand-blue focus:outline-none"
-            >
-              {SITE_OPTIONS.map((site) => (
-                <option key={site} value={site}>
-                  {site}
-                </option>
-              ))}
-            </select>
+              placeholder="e.g. Lagos, Warri, Port Harcourt"
+            />
           </Field>
 
           {formError ? <p className="text-sm font-medium text-red-600">{formError}</p> : null}
@@ -197,8 +247,8 @@ export default function UserManagement() {
             <Button variant="secondary" size="md" className="border border-ink/10" onClick={() => setIsAddOpen(false)}>
               Cancel
             </Button>
-            <Button size="md" onClick={handleSendInvite}>
-              Create &amp; Send Invite
+            <Button size="md" onClick={handleCreateUser} disabled={submitting}>
+              {submitting ? "Creating…" : "Create User"}
             </Button>
           </div>
         </div>

@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { Button, Eyebrow } from "@/components/ui";
 import { Section } from "@/components/ui";
-import engineeringPhoto from "@/assets/images/service-engineering.png";
+import engineeringPhoto from "@/assets/images/service-engineering.jpeg";
 import procurementPhoto from "@/assets/images/service-procurement.png";
 import projectPhoto from "@/assets/images/service-project.png";
 
@@ -76,7 +76,7 @@ function ServiceCardItem({ image, icon, title, description }: ServiceCard) {
       <div className="absolute inset-x-0 bottom-0 p-5">
         <div className="flex items-center gap-2 text-white">
           {icon}
-          <h3 className="text-sm font-bold tracking-wide uppercase">{title}</h3>
+          <h3 className="text-sm font-bold tracking-wide uppercase text-orange-400">{title}</h3>
         </div>
         <p className="mt-2 text-sm leading-relaxed text-white/80">{description}</p>
       </div>

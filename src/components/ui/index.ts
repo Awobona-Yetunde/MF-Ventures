@@ -6,3 +6,4 @@ export { SectionHeading } from "./SectionHeading";
 export { Card } from "./Card";
 export { ComingSoon } from "./ComingSoon";
 export { Modal } from "./Modal";
+export { Reveal } from "./Reveal";

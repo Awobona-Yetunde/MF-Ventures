@@ -1,36 +1,52 @@
+import { useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { PageHeader, StatCard, DataTable, StatusBadge, PriorityBadge } from "@/dashboard/components";
 import type { Column } from "@/dashboard/components";
 import { useDashboardData } from "@/dashboard/state/DashboardProvider";
 import { getAdminStats, getEquipmentById, formatNaira, formatDate } from "@/dashboard/data/selectors";
-import type { RepairRequest } from "@/dashboard/types";
+import { EQUIPMENT_STATUS_LABEL } from "@/dashboard/data/labels";
+import type { EquipmentStatus, RepairRequest } from "@/dashboard/types";
 
-// Mock monthly maintenance spend — stands in for a real aggregation query.
-const MONTHLY_COST_TREND = [
-  { month: "May", amount: 420_000 },
-  { month: "Jun", amount: 610_000 },
-  { month: "Jul", amount: 340_000 },
-  { month: "Aug", amount: 780_000 },
-  { month: "Sep", amount: 905_000 },
-  { month: "Oct", amount: 650_000 },
-];
+const EQUIPMENT_STATUSES: EquipmentStatus[] = ["operational", "under_maintenance", "out_of_service"];
+
+const STATUS_BAR_COLOR: Record<EquipmentStatus, string> = {
+  operational: "bg-emerald-500",
+  under_maintenance: "bg-amber-500",
+  out_of_service: "bg-red-500",
+};
 
 export default function AdminDashboard() {
   const navigate = useNavigate();
-  const { equipment, repairRequests, users } = useDashboardData();
+  const { equipment, repairRequests, users, refreshEquipment, refreshRepairRequests, refreshUsers } = useDashboardData();
+
+  // Best-effort refresh on every visit so this screen doesn't rely solely
+  // on the one fetch that ran right after login.
+  useEffect(() => {
+    refreshEquipment().catch(() => {});
+    refreshRepairRequests().catch(() => {});
+    refreshUsers().catch(() => {});
+  }, [refreshEquipment, refreshRepairRequests, refreshUsers]);
+
   const stats = getAdminStats(equipment, repairRequests);
   const recentRequests = [...repairRequests]
-    .sort((a, b) => new Date(b.reportedAt).getTime() - new Date(a.reportedAt).getTime())
+    .sort((a, b) => new Date(b.faultDatetime).getTime() - new Date(a.faultDatetime).getTime())
     .slice(0, 5);
 
-  const maxCost = Math.max(...MONTHLY_COST_TREND.map((m) => m.amount));
+  // Real counts from the equipment register — replaces what used to be a
+  // placeholder cost-trend chart with numbers that don't correspond to
+  // any actual backend data.
+  const statusCounts = useMemo(
+    () => EQUIPMENT_STATUSES.map((s) => ({ status: s, count: equipment.filter((eq) => eq.status === s).length })),
+    [equipment],
+  );
+  const maxStatusCount = Math.max(1, ...statusCounts.map((s) => s.count));
 
   const columns: Column<RepairRequest>[] = [
-    { header: "Request ID", cell: (rr) => <span className="font-semibold">{rr.id}</span> },
+    { header: "Request ID", cell: (rr) => <span className="font-semibold">{rr.requestNumber}</span> },
     { header: "Equipment", cell: (rr) => getEquipmentById(equipment, rr.equipmentId)?.name ?? "—" },
     { header: "Priority", cell: (rr) => <PriorityBadge priority={rr.priority} /> },
     { header: "Status", cell: (rr) => <StatusBadge status={rr.status} /> },
-    { header: "Reported", cell: (rr) => formatDate(rr.reportedAt) },
+    { header: "Reported", cell: (rr) => formatDate(rr.faultDatetime) },
   ];
 
   return (
@@ -51,20 +67,21 @@ export default function AdminDashboard() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="rounded-lg border border-black/5 bg-white p-5 shadow-sm lg:col-span-2">
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-ink">Maintenance cost trend (last 6 months)</h2>
-            <span className="text-sm font-semibold text-ink">{formatNaira(stats.totalMaintenanceCost)} total</span>
+            <h2 className="text-sm font-semibold text-ink">Equipment by status</h2>
+            <span className="text-sm font-semibold text-ink">{equipment.length} total</span>
           </div>
           <div className="mt-6 flex h-40 items-end gap-4">
-            {MONTHLY_COST_TREND.map((m) => (
-              <div key={m.month} className="flex flex-1 flex-col items-center gap-2">
+            {statusCounts.map((s) => (
+              <div key={s.status} className="flex flex-1 flex-col items-center gap-2">
                 <div className="flex h-32 w-full items-end">
                   <div
-                    className="w-full rounded-t-md bg-brand-blue/80"
-                    style={{ height: `${(m.amount / maxCost) * 100}%` }}
-                    title={formatNaira(m.amount)}
+                    className={`w-full rounded-t-md ${STATUS_BAR_COLOR[s.status]}`}
+                    style={{ height: `${(s.count / maxStatusCount) * 100}%` }}
+                    title={`${s.count} equipment`}
                   />
                 </div>
-                <span className="text-xs font-medium text-muted">{m.month}</span>
+                <span className="text-xs font-medium text-muted">{EQUIPMENT_STATUS_LABEL[s.status]}</span>
+                <span className="text-sm font-semibold text-ink">{s.count}</span>
               </div>
             ))}
           </div>

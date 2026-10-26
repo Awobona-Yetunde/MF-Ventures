@@ -53,11 +53,10 @@ export default function App() {
         </Route>
 
         {/* Internal dashboard — Digital Equipment Maintenance & Approval System.
-            No real backend yet: DashboardProvider holds an in-memory mock of
-            users/equipment/repair requests, and Login matches against it
-            instead of calling an API. Every screen under here reads from
-            that same provider, so an approval, a new fault report, or a
-            logged repair action shows up everywhere else immediately. */}
+            DashboardProvider wires every screen under here to the real backend
+            API (see src/dashboard/api/), so an approval, a new fault report, or
+            a logged repair action shows up everywhere else as soon as it's
+            fetched again from the server. */}
         <Route element={<DashboardScope />}>
           <Route path="dashboard/login" element={<DashboardLogin />} />
 

@@ -6,9 +6,9 @@ import type { RepairActionInput } from "@/dashboard/types";
 const TODAY = new Date().toISOString().slice(0, 10);
 
 const EMPTY_FORM = {
-  date: TODAY,
-  action: "",
-  partsUsed: "",
+  actionDate: TODAY,
+  actionTaken: "",
+  partsMaterialsUsed: "",
   quantity: "",
   unitCost: "",
   labourCost: "",
@@ -16,33 +16,41 @@ const EMPTY_FORM = {
 };
 
 interface RepairActionFormProps {
-  onSubmit: (input: RepairActionInput) => void;
+  onSubmit: (input: RepairActionInput) => Promise<void>;
 }
 
 /** Logs one repair action / cost entry against the current request. */
 export function RepairActionForm({ onSubmit }: RepairActionFormProps) {
   const [form, setForm] = useState(EMPTY_FORM);
   const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!form.action.trim()) {
+    if (!form.actionTaken.trim()) {
       setError("Describe the action taken.");
       return;
     }
 
     setError(null);
-    onSubmit({
-      date: form.date,
-      action: form.action.trim(),
-      partsUsed: form.partsUsed.trim() || undefined,
-      quantity: form.quantity ? Number(form.quantity) : undefined,
-      unitCost: form.unitCost ? Number(form.unitCost) : undefined,
-      labourCost: form.labourCost ? Number(form.labourCost) : undefined,
-      notes: form.notes.trim() || undefined,
-    });
-    setForm(EMPTY_FORM);
+    setSubmitting(true);
+    try {
+      await onSubmit({
+        actionDate: form.actionDate,
+        actionTaken: form.actionTaken.trim(),
+        partsMaterialsUsed: form.partsMaterialsUsed.trim() || undefined,
+        quantity: form.quantity ? Number(form.quantity) : undefined,
+        unitCost: form.unitCost ? Number(form.unitCost) : undefined,
+        labourCost: form.labourCost ? Number(form.labourCost) : undefined,
+        notes: form.notes.trim() || undefined,
+      });
+      setForm(EMPTY_FORM);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -50,12 +58,28 @@ export function RepairActionForm({ onSubmit }: RepairActionFormProps) {
       <p className="text-sm font-semibold text-ink">Log a repair action</p>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <TextField label="Date" type="date" value={form.date} onChange={(v) => setForm((f) => ({ ...f, date: v }))} />
-        <TextField label="Action Taken" value={form.action} onChange={(v) => setForm((f) => ({ ...f, action: v }))} placeholder="e.g. Replaced hydraulic seals" />
-        <TextField label="Parts / Materials Used" value={form.partsUsed} onChange={(v) => setForm((f) => ({ ...f, partsUsed: v }))} placeholder="Optional" />
+        <TextField label="Date" type="date" value={form.actionDate} onChange={(v) => setForm((f) => ({ ...f, actionDate: v }))} />
+        <TextField
+          label="Action Taken"
+          value={form.actionTaken}
+          onChange={(v) => setForm((f) => ({ ...f, actionTaken: v }))}
+          placeholder="e.g. Replaced hydraulic seals"
+        />
+        <TextField
+          label="Parts / Materials Used"
+          value={form.partsMaterialsUsed}
+          onChange={(v) => setForm((f) => ({ ...f, partsMaterialsUsed: v }))}
+          placeholder="Optional"
+        />
         <TextField label="Quantity" type="number" value={form.quantity} onChange={(v) => setForm((f) => ({ ...f, quantity: v }))} placeholder="Optional" />
         <TextField label="Unit Cost (₦)" type="number" value={form.unitCost} onChange={(v) => setForm((f) => ({ ...f, unitCost: v }))} placeholder="Optional" />
-        <TextField label="Labour Cost (₦)" type="number" value={form.labourCost} onChange={(v) => setForm((f) => ({ ...f, labourCost: v }))} placeholder="Optional" />
+        <TextField
+          label="Labour Cost (₦)"
+          type="number"
+          value={form.labourCost}
+          onChange={(v) => setForm((f) => ({ ...f, labourCost: v }))}
+          placeholder="Optional"
+        />
       </div>
 
       <label className="block">
@@ -70,8 +94,8 @@ export function RepairActionForm({ onSubmit }: RepairActionFormProps) {
 
       {error && <p className="text-sm font-medium text-red-600">{error}</p>}
 
-      <Button type="submit" size="md">
-        Save Repair Action
+      <Button type="submit" size="md" disabled={submitting}>
+        {submitting ? "Saving…" : "Save Repair Action"}
       </Button>
     </form>
   );

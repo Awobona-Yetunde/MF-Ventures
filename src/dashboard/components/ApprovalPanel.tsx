@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { Button } from "@/components/ui";
-import type { ApprovalDecision } from "@/dashboard/types";
+import type { ApprovalDecision, ApprovalStage } from "@/dashboard/types";
+import { APPROVAL_DECISION_LABEL } from "@/dashboard/data/labels";
 
 interface ApprovalPanelProps {
-  stage: "Supervisor" | "MD";
-  onDecide: (decision: ApprovalDecision, comment: string) => void;
+  stage: ApprovalStage;
+  onDecide: (decision: ApprovalDecision, comment: string) => Promise<void>;
 }
 
 /**
@@ -16,29 +17,39 @@ interface ApprovalPanelProps {
 export function ApprovalPanel({ stage, onDecide }: ApprovalPanelProps) {
   const [comment, setComment] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState<ApprovalDecision | null>(null);
+  const [submitting, setSubmitting] = useState<ApprovalDecision | null>(null);
+  const [recorded, setRecorded] = useState<ApprovalDecision | null>(null);
 
-  function handleDecide(decision: ApprovalDecision) {
-    if (decision !== "Approved" && comment.trim().length === 0) {
+  async function handleDecide(decision: ApprovalDecision) {
+    if (decision !== "approve" && comment.trim().length === 0) {
       setError("Add a comment so the mechanic knows what to fix or clarify.");
       return;
     }
     setError(null);
-    setPending(decision);
-    onDecide(decision, comment.trim());
+    setSubmitting(decision);
+    try {
+      await onDecide(decision, comment.trim());
+      setRecorded(decision);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
+    } finally {
+      setSubmitting(null);
+    }
   }
 
-  if (pending) {
+  if (recorded) {
     return (
       <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-5 text-sm font-medium text-emerald-800">
-        Decision recorded: {pending}.
+        Decision recorded: {APPROVAL_DECISION_LABEL[recorded]}.
       </div>
     );
   }
 
+  const stageLabel = stage === "supervisor" ? "Supervisor" : "MD";
+
   return (
     <div className="rounded-lg border border-brand-blue/20 bg-brand-blue/5 p-5">
-      <h2 className="text-sm font-semibold text-ink">{stage} Decision Required</h2>
+      <h2 className="text-sm font-semibold text-ink">{stageLabel} Decision Required</h2>
       <p className="mt-1 text-sm text-muted">
         Approve to move this request forward, or send it back with a comment explaining what's needed.
       </p>
@@ -57,14 +68,20 @@ export function ApprovalPanel({ stage, onDecide }: ApprovalPanelProps) {
       {error && <p className="mt-2 text-sm font-medium text-red-600">{error}</p>}
 
       <div className="mt-4 flex flex-wrap gap-2">
-        <Button size="md" onClick={() => handleDecide("Approved")}>
-          Approve Repair
+        <Button size="md" onClick={() => handleDecide("approve")} disabled={submitting !== null}>
+          {submitting === "approve" ? "Approving…" : "Approve Repair"}
         </Button>
-        <Button variant="secondary" size="md" className="border border-amber-300" onClick={() => handleDecide("Request More Information")}>
-          Request More Information
+        <Button
+          variant="secondary"
+          size="md"
+          className="border border-amber-300"
+          onClick={() => handleDecide("request_info")}
+          disabled={submitting !== null}
+        >
+          {submitting === "request_info" ? "Sending…" : "Request More Information"}
         </Button>
-        <Button variant="danger" size="md" onClick={() => handleDecide("Rejected / Returned")}>
-          Reject / Return
+        <Button variant="danger" size="md" onClick={() => handleDecide("reject_return")} disabled={submitting !== null}>
+          {submitting === "reject_return" ? "Recording…" : "Reject / Return"}
         </Button>
       </div>
     </div>

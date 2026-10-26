@@ -1,35 +1,65 @@
+import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { PageHeader, StatusBadge, PriorityBadge, EmptyState } from "@/dashboard/components";
-import { useDashboardData } from "@/dashboard/state/DashboardProvider";
-import { getEquipmentById, getRepairRequestsForEquipment, formatDate, formatNaira } from "@/dashboard/data/selectors";
+import { getEquipment } from "@/dashboard/api/equipment";
+import { getErrorMessage } from "@/dashboard/state/DashboardProvider";
+import { formatDate, formatNaira } from "@/dashboard/data/selectors";
+import type { Equipment } from "@/dashboard/types";
 
 export default function EquipmentProfile() {
   const { equipmentId } = useParams<{ equipmentId: string }>();
-  const { equipment: equipmentList, repairRequests: allRequests } = useDashboardData();
-  const equipment = equipmentId ? getEquipmentById(equipmentList, equipmentId) : undefined;
-  const repairRequests = equipmentId ? getRepairRequestsForEquipment(allRequests, equipmentId) : [];
+  const [equipment, setEquipment] = useState<Equipment | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
+  useEffect(() => {
+    if (!equipmentId) return;
+    let cancelled = false;
+    setLoading(true);
+    getEquipment(equipmentId)
+      .then((eq) => {
+        if (!cancelled) setEquipment(eq);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(getErrorMessage(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [equipmentId]);
+
+  if (loading) return <EmptyState message="Loading equipment profile…" />;
+  if (error) return <EmptyState message={error} />;
   if (!equipment) {
     return <EmptyState message="Equipment record not found." />;
   }
 
+  const repairRequests = equipment.repairRequests ?? [];
+
   const fields: Array<[string, string]> = [
-    ["Type", equipment.type],
+    ["Type", equipment.equipmentType ?? "—"],
     ["Registration Number", equipment.registrationNumber],
-    ["Serial Number", equipment.serialNumber],
-    ["Model Number", equipment.modelNumber],
-    ["Capacity / Specification", equipment.capacity ?? "—"],
-    ["Current Location", equipment.location],
-    ["Site", equipment.site],
+    ["Serial Number", equipment.serialNumber ?? "—"],
+    ["Model Number", equipment.modelNumber ?? "—"],
+    ["Capacity / Specification", equipment.capacitySpec ?? "—"],
+    ["Current Location", equipment.currentLocation ?? "—"],
+    ["Site", equipment.assignedSite ?? "—"],
     ["Last Maintenance Date", formatDate(equipment.lastMaintenanceDate)],
     ["Next Maintenance Date", formatDate(equipment.nextMaintenanceDate)],
   ];
 
   return (
     <div className="space-y-8">
+      <Link to="/dashboard/equipment" className="inline-flex items-center gap-1 text-sm font-semibold text-brand-blue hover:underline">
+        ← Back to Equipment Register
+      </Link>
+
       <PageHeader
         title={equipment.name}
-        description={`Equipment profile · ${equipment.site}`}
+        description={`Equipment profile${equipment.assignedSite ? ` · ${equipment.assignedSite}` : ""}`}
         actions={<StatusBadge status={equipment.status} />}
       />
 
@@ -66,7 +96,7 @@ export default function EquipmentProfile() {
                 className="flex flex-col gap-2 rounded-lg border border-black/5 bg-white p-4 shadow-sm transition-colors hover:bg-surface/60 sm:flex-row sm:items-center sm:justify-between"
               >
                 <div>
-                  <p className="text-sm font-semibold text-ink">{rr.id}</p>
+                  <p className="text-sm font-semibold text-ink">{rr.requestNumber}</p>
                   <p className="mt-0.5 text-sm text-muted">{rr.faultDescription}</p>
                 </div>
                 <div className="flex items-center gap-2">

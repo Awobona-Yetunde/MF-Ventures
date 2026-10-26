@@ -1,149 +1,237 @@
 // Core domain types for the Digital Equipment Maintenance & Approval System.
-// Mirrors the structure in the "Fleet Functionality" spec: equipment records,
-// repair requests with a two-stage approval chain, repair actions/costs, and
-// role-scoped users. All data is mocked for now — these types are what a
-// real API response should eventually match.
+//
+// These mirror the real backend's OpenAPI schema field-for-field (same enum
+// values, same optionality) with snake_case renamed to camelCase — nothing
+// more. Keeping them a direct mirror, rather than reshaping them into
+// friendlier names, is deliberate: it means the mapping code in
+// src/dashboard/api/*.ts is pure renaming with no translation to get wrong,
+// and a response the backend actually sends can never silently not match
+// what the UI expects. Human-readable labels for the enum values below live
+// in src/dashboard/data/labels.ts, kept separate from the types themselves.
 
 export type Role = "mechanic" | "supervisor" | "md" | "admin";
 
-export type UserStatus = "Active" | "Invited";
-
 export interface User {
   id: string;
-  name: string;
+  fullName: string;
   email: string;
+  phoneNumber: string | null;
+  site: string | null;
   role: Role;
-  site: string;
-  avatarInitials: string;
-  status: UserStatus;
+  isActive: boolean;
+  createdAt: string;
 }
 
-export type EquipmentStatus =
-  | "Operational"
-  | "Under Maintenance"
-  | "Out of Service";
-
-/** Fields captured on the "Add Equipment" form (Equipment Register). */
-export interface EquipmentInput {
-  name: string;
-  registrationNumber: string;
-  serialNumber: string;
-  modelNumber: string;
-  site: string;
+/** Fields the admin fills in on "Add User" — matches UserCreate exactly. */
+export interface UserCreateInput {
+  fullName: string;
+  email: string;
+  phoneNumber?: string;
+  site?: string;
+  role: Role;
+  password: string;
 }
+
+/** Fields an admin can change on an existing user — matches UserUpdate. */
+export interface UserUpdateInput {
+  fullName?: string;
+  phoneNumber?: string;
+  site?: string;
+  isActive?: boolean;
+  role?: Role;
+}
+
+export type EquipmentStatus = "operational" | "under_maintenance" | "out_of_service";
 
 export interface Equipment {
   id: string;
   name: string;
-  type: string;
+  equipmentType: string | null;
   registrationNumber: string;
-  serialNumber: string;
-  modelNumber: string;
-  capacity?: string;
-  location: string;
-  site: string;
+  serialNumber: string | null;
+  modelNumber: string | null;
+  capacitySpec: string | null;
+  currentLocation: string | null;
+  assignedSite: string | null;
   status: EquipmentStatus;
   lastMaintenanceDate: string | null;
   nextMaintenanceDate: string | null;
   totalMaintenanceCost: number;
+  createdAt: string;
+  updatedAt: string;
+  /** Only present on the single-equipment detail response. */
+  repairRequests?: RepairRequest[];
 }
 
-export type FaultType =
-  | "Corrective Maintenance"
-  | "Preventive Maintenance"
-  | "Emergency Repair";
-export type Priority = "Low" | "Medium" | "High" | "Critical";
+/** Fields captured on the "Add Equipment" form — matches EquipmentCreate. */
+export interface EquipmentInput {
+  name: string;
+  registrationNumber: string;
+  equipmentType?: string;
+  serialNumber?: string;
+  modelNumber?: string;
+  capacitySpec?: string;
+  currentLocation?: string;
+  assignedSite?: string;
+  /** ISO date (YYYY-MM-DD), not a full datetime. */
+  nextMaintenanceDate?: string;
+}
+
+/** Fields that can be changed on an existing equipment record — matches EquipmentUpdate. */
+export interface EquipmentUpdateInput {
+  name?: string;
+  equipmentType?: string;
+  serialNumber?: string;
+  modelNumber?: string;
+  capacitySpec?: string;
+  currentLocation?: string;
+  assignedSite?: string;
+  status?: EquipmentStatus;
+  nextMaintenanceDate?: string;
+}
+
+export type FaultType = "corrective_maintenance" | "preventive_maintenance" | "emergency_repair";
+export type Priority = "low" | "medium" | "high" | "critical";
 
 export type RepairStatus =
-  | "Draft"
-  | "Submitted"
-  | "Pending Supervisor Approval"
-  | "Supervisor Approved"
-  | "Pending MD Approval"
-  | "Approved"
-  | "Repair In Progress"
-  | "Pending Parts"
-  | "Repair Completed"
-  | "Closed"
-  | "Rejected / Returned"
-  | "Cancelled";
+  | "draft"
+  | "submitted"
+  | "pending_supervisor_approval"
+  | "supervisor_approved"
+  | "pending_md_approval"
+  | "approved"
+  | "repair_in_progress"
+  | "pending_parts"
+  | "repair_completed"
+  | "closed"
+  | "rejected_returned"
+  | "cancelled";
+
+export type ApprovalStage = "supervisor" | "md";
+export type ApprovalDecision = "approve" | "reject_return" | "request_info";
 
 export interface ApprovalRecord {
-  userId: string;
-  userName: string;
-  role: Role;
-  decision: "Approved" | "Rejected / Returned" | "Request More Information";
-  comment: string;
-  timestamp: string;
+  id: string;
+  repairRequestId: string;
+  stage: ApprovalStage;
+  decidedById: string;
+  decision: ApprovalDecision;
+  comment: string | null;
+  createdAt: string;
+  decidedByRole: Role;
+}
+
+export interface Attachment {
+  id: string;
+  originalFilename: string;
+  contentType: string;
+  sizeBytes: number;
+  uploadedById: string;
+  createdAt: string;
+}
+
+export interface AuditLogEntry {
+  id: string;
+  repairRequestId: string | null;
+  actorId: string;
+  action: string;
+  fromStatus: string | null;
+  toStatus: string | null;
+  detail: string | null;
+  createdAt: string;
 }
 
 export interface RepairAction {
   id: string;
-  date: string;
-  action: string;
-  partsUsed?: string;
+  repairRequestId: string;
+  actionDate: string;
+  actionTaken: string;
+  partsMaterialsUsed: string | null;
+  quantity: number | null;
+  unitCost: number | null;
+  labourCost: number | null;
+  totalCost: number;
+  performedById: string;
+  notes: string | null;
+  invoiceAttachmentId: string | null;
+  createdAt: string;
+}
+
+/** One entry in a repair action log submission — matches RepairActionCreate. */
+export interface RepairActionInput {
+  actionDate: string;
+  actionTaken: string;
+  partsMaterialsUsed?: string;
   quantity?: number;
   unitCost?: number;
   labourCost?: number;
-  totalCost: number;
-  performedBy: string;
   notes?: string;
+  invoiceAttachmentId?: string;
 }
 
 export interface RepairRequest {
-  id: string; // e.g. RR-2026-0001
+  id: string;
+  requestNumber: string;
   equipmentId: string;
+  reportedById: string;
+  assignedMechanicId: string | null;
+  faultDetectedBy: string | null;
+  faultDatetime: string;
   faultType: FaultType;
   priority: Priority;
-  status: RepairStatus;
   faultDescription: string;
-  faultReportedBy: string;
-  faultDetectedBy: string;
-  repairRecommendation: string;
-  reportedAt: string;
-  /** The mechanic who filed this request — drives "my reports" scoping and who may log repair actions on it. */
-  reportedByUserId: string;
-  /** The supervisor this request is routed to for first-stage approval. */
-  assignedSupervisorId: string;
-  supervisorApproval: ApprovalRecord | null;
-  mdApproval: ApprovalRecord | null;
-  repairActions: RepairAction[];
-  estimatedCost?: number;
-  completedAt: string | null;
+  repairRecommendation: string | null;
+  status: RepairStatus;
+  estimatedCost: number | null;
+  createdAt: string;
+  updatedAt: string;
+  /** Only present on the detail response (GET/POST/PATCH of a single request), not on list items. */
+  attachments?: Attachment[];
+  repairActions?: RepairAction[];
+  approvals?: ApprovalRecord[];
+  auditTrail?: AuditLogEntry[];
+  totalRepairCost?: number;
 }
 
-/** Fields captured on the "Report Equipment Fault" form (Mechanic Dashboard). */
+/** Fields captured on the "Report Equipment Fault" form — matches RepairRequestCreate. */
 export interface FaultReportInput {
   equipmentId: string;
+  faultDatetime: string;
   faultType: FaultType;
   priority: Priority;
   faultDescription: string;
-  faultDetectedBy: string;
-  repairRecommendation: string;
-  reportedAt: string;
+  faultDetectedBy?: string;
+  repairRecommendation?: string;
+  estimatedCost?: number;
+  /** true moves it straight to Pending Supervisor Approval instead of leaving it as a draft. */
+  submitImmediately: boolean;
+}
+
+/** Only allowed while status === "draft", and only by the reporting mechanic/admin — matches RepairRequestUpdate. */
+export interface RepairRequestUpdateInput {
+  faultDatetime?: string;
+  faultType?: FaultType;
+  priority?: Priority;
+  faultDescription?: string;
+  faultDetectedBy?: string;
+  repairRecommendation?: string;
   estimatedCost?: number;
 }
 
-export type ApprovalDecision = ApprovalRecord["decision"];
-
-/** One entry in a repair action log submission (Repair Request Detail, mechanic view). */
-export interface RepairActionInput {
-  date: string;
-  action: string;
-  partsUsed?: string;
-  quantity?: number;
-  unitCost?: number;
-  labourCost?: number;
-  notes?: string;
-}
+export type NotificationType =
+  | "new_fault_report"
+  | "supervisor_approved"
+  | "md_approved"
+  | "request_more_info"
+  | "repair_completed"
+  | "critical_fault"
+  | "rejected";
 
 export interface Notification {
   id: string;
+  notificationType: NotificationType;
   message: string;
-  timestamp: string;
-  read: boolean;
-  /** Who should see this — matches the routing rules in the spec's Notifications section. */
-  recipientUserId: string;
-  /** The request this notification is about, if any — lets the bell link straight to it. */
-  relatedRequestId?: string;
+  isRead: boolean;
+  repairRequestId: string | null;
+  createdAt: string;
 }

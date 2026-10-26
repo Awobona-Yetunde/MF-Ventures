@@ -1,5 +1,5 @@
 import { cn } from "@/lib/cn";
-import { Card, Eyebrow, Section } from "@/components/ui";
+import { Card, Eyebrow, Reveal, Section } from "@/components/ui";
 
 interface Reason {
   number: string;
@@ -42,41 +42,51 @@ const REASONS: Reason[] = [
   },
 ];
 
-// Visual layout from the design: col 1 stacks reasons 1 & 3, col 2 stacks
-// reasons 2 & 4, col 3 is the highlighted reason spanning the full height
-// of the other two columns combined.
-const COLUMN_ONE = [REASONS[0], REASONS[2]];
-const COLUMN_TWO = [REASONS[1], REASONS[3]];
-const HIGHLIGHT = REASONS[4];
+// Explicit grid placement (rather than two independently-stacked columns)
+// so Reason 01/02 share row 1, 03/04 share row 2, and the grid's default
+// stretch behaviour makes every card in a row match the row's tallest card
+// — that's what keeps the sizes even regardless of how long each blurb is.
+// The highlighted card spans both rows, so its height always matches the
+// combined height of the other two columns.
+const GRID_PLACEMENT = [
+  "md:col-start-1 md:row-start-1",
+  "md:col-start-2 md:row-start-1",
+  "md:col-start-1 md:row-start-2",
+  "md:col-start-2 md:row-start-2",
+  "md:col-start-3 md:row-start-1 md:row-span-2",
+];
 
 export function WhyChooseUs() {
   return (
     <Section tone="light">
-      <Eyebrow>Why Choose Us</Eyebrow>
-      <h2 className="mt-4 max-w-2xl text-3xl font-extrabold leading-tight text-ink md:text-4xl">
-        We combine engineering support, procurement and project coordination to help keep requirements moving.
-      </h2>
+      <Reveal>
+        <Eyebrow>Why Choose Us</Eyebrow>
+        <h2 className="mt-4 max-w-2xl text-3xl leading-tight font-extrabold text-ink md:text-4xl">
+          We combine engineering support, procurement and project coordination to help keep requirements moving.
+        </h2>
+      </Reveal>
 
       <div className="mt-10 grid grid-cols-1 gap-5 md:grid-cols-3">
-        <div className="flex flex-col gap-5">
-          {COLUMN_ONE.map((reason) => (
-            <ReasonCard key={reason.number} reason={reason} />
-          ))}
-        </div>
-        <div className="flex flex-col gap-5">
-          {COLUMN_TWO.map((reason) => (
-            <ReasonCard key={reason.number} reason={reason} />
-          ))}
-        </div>
-        <ReasonCard reason={HIGHLIGHT} className="flex-1 md:flex md:flex-col md:justify-center" />
+        {REASONS.map((reason, index) => (
+          <Reveal key={reason.number} delay={index * 100} className={GRID_PLACEMENT[index]}>
+            <ReasonCard reason={reason} />
+          </Reveal>
+        ))}
       </div>
     </Section>
   );
 }
 
-function ReasonCard({ reason, className }: { reason: Reason; className?: string }) {
+function ReasonCard({ reason }: { reason: Reason }) {
   return (
-    <Card tone={reason.highlight ? "navy" : "light"} className={cn(className)}>
+    <Card
+      tone={reason.highlight ? "navy" : "light"}
+      className={cn(
+        "h-full transition-all duration-300 hover:-translate-y-1 hover:shadow-lg",
+        reason.highlight ? "hover:shadow-navy-950/20" : "hover:shadow-black/10",
+        reason.highlight && "flex flex-col justify-center",
+      )}
+    >
       <p className={cn("text-xs font-bold", reason.highlight ? "text-white/60" : "text-brand-blue")}>
         {reason.number}
       </p>

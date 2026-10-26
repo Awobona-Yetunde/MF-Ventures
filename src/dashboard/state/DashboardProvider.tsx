@@ -1,426 +1,474 @@
-import { createContext, useCallback, useContext, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { EQUIPMENT, REPAIR_REQUESTS, USERS } from "@/dashboard/data/mockData";
-import { NOTIFICATIONS } from "@/dashboard/data/notifications";
-import { generateNextRequestId, getSupervisorForSite } from "@/dashboard/data/selectors";
+import { login as apiLogin, me as apiMe } from "@/dashboard/api/auth";
+import { clearTokens, getRefreshToken } from "@/dashboard/api/tokens";
+import { refreshAccessToken, ApiError } from "@/dashboard/api/client";
+import { createEquipment, listEquipment } from "@/dashboard/api/equipment";
+import {
+  cancelRepairRequest as apiCancelRepairRequest,
+  createRepairRequest,
+  getRepairRequest,
+  listRepairRequests,
+  assignMechanic as apiAssignMechanic,
+  setEstimatedCost as apiSetEstimatedCost,
+} from "@/dashboard/api/repairRequests";
+import { decideAsMd, decideAsSupervisor, getApprovalQueue } from "@/dashboard/api/approvals";
+import {
+  addRepairAction as apiAddRepairAction,
+  closeRepair as apiCloseRepair,
+  completeRepair as apiCompleteRepair,
+  resumeRepair as apiResumeRepair,
+  setPendingParts as apiSetPendingParts,
+  startRepair as apiStartRepair,
+} from "@/dashboard/api/repairActions";
+import { createUser, listUsers } from "@/dashboard/api/users";
+import { listNotifications, markNotificationRead as apiMarkNotificationRead } from "@/dashboard/api/notifications";
+import {
+  dismissMaintenanceAlert as dismissMaintenanceAlertStorage,
+  getDueMaintenanceAlerts,
+} from "@/dashboard/data/maintenanceAlerts";
+import type { MaintenanceAlert } from "@/dashboard/data/maintenanceAlerts";
 import type {
   ApprovalDecision,
   Equipment,
   EquipmentInput,
   FaultReportInput,
   Notification,
-  RepairAction,
   RepairActionInput,
   RepairRequest,
-  Role,
   User,
+  UserCreateInput,
 } from "@/dashboard/types";
 
-const SESSION_STORAGE_KEY = "mfv-dashboard-session-user-id";
-
-function nowIso(): string {
-  return new Date().toISOString();
-}
-
-function nextActionId(existing: RepairAction[]): string {
-  return `ra-${existing.length + 1}-${Date.now().toString(36)}`;
-}
-
-interface AddUserInput {
-  name: string;
-  email: string;
-  role: Role;
-  site: string;
-}
-
-interface AddUserResult {
-  user: User;
-  inviteLink: string;
+/** Turns any thrown error into a message safe to show the user. */
+export function getErrorMessage(err: unknown): string {
+  if (err instanceof ApiError) return err.message;
+  if (err instanceof Error) return err.message;
+  return "Something went wrong. Please try again.";
 }
 
 interface DashboardContextValue {
-  // Session — stands in for real auth until a backend exists. A real
-  // implementation swaps `login`/`logout` for API calls and keeps the same
-  // shape, so nothing downstream (route guards, nav, Topbar) has to change.
+  // Session
   currentUser: User | null;
-  login: (email: string) => { ok: true } | { ok: false; error: string };
+  /** True until the silent session-restore check (via the stored refresh token) has resolved, one way or the other. */
+  authReady: boolean;
+  login: (email: string, password: string) => Promise<{ ok: true } | { ok: false; error: string }>;
   logout: () => void;
 
-  // Reference data
+  // Reference data — fetched once a session exists, refreshed after relevant mutations.
   equipment: Equipment[];
-  repairRequests: RepairRequest[];
-  notifications: Notification[];
-  users: User[];
+  equipmentLoading: boolean;
+  refreshEquipment: () => Promise<void>;
 
-  // Mutations — every write stays in memory for this browser tab only,
-  // matching the rest of this dashboard until there's an API to persist to.
-  submitFaultReport: (input: FaultReportInput, reporter: User) => RepairRequest;
-  decideSupervisor: (requestId: string, decision: ApprovalDecision, comment: string, supervisor: User) => void;
-  decideMd: (requestId: string, decision: ApprovalDecision, comment: string, md: User) => void;
-  addRepairAction: (requestId: string, input: RepairActionInput, performedBy: User) => void;
-  setPendingParts: (requestId: string) => void;
-  resumeRepair: (requestId: string) => void;
-  markCompleted: (requestId: string) => void;
-  markNotificationRead: (id: string) => void;
-  addUser: (input: AddUserInput) => AddUserResult | { error: string };
-  addEquipment: (input: EquipmentInput) => Equipment | { error: string };
+  repairRequests: RepairRequest[];
+  repairRequestsLoading: boolean;
+  refreshRepairRequests: () => Promise<void>;
+  /** Fetches one request's full detail (attachments, actions, approvals, audit trail) and merges it into the shared list. */
+  loadRepairRequestDetail: (requestId: string) => Promise<RepairRequest>;
+
+  approvalQueue: RepairRequest[];
+  approvalQueueLoading: boolean;
+  refreshApprovalQueue: () => Promise<void>;
+
+  notifications: Notification[];
+  notificationsLoading: boolean;
+  refreshNotifications: () => Promise<void>;
+  markNotificationRead: (id: string) => Promise<void>;
+
+  users: User[];
+  usersLoading: boolean;
+  refreshUsers: () => Promise<void>;
+
+  // Maintenance-due alerts — computed client-side from equipment.nextMaintenanceDate;
+  // the backend has no such notification type. Dismissal is kept per-browser.
+  maintenanceAlerts: MaintenanceAlert[];
+  dismissMaintenanceAlert: (alert: MaintenanceAlert) => void;
+
+  // Mutations
+  addEquipment: (input: EquipmentInput) => Promise<Equipment | { error: string }>;
+  addUser: (input: UserCreateInput) => Promise<User | { error: string }>;
+  submitFaultReport: (input: FaultReportInput) => Promise<RepairRequest | { error: string }>;
+  decideSupervisor: (requestId: string, decision: ApprovalDecision, comment: string) => Promise<void>;
+  decideMd: (requestId: string, decision: ApprovalDecision, comment: string) => Promise<void>;
+  addRepairAction: (requestId: string, input: RepairActionInput) => Promise<void>;
+  setPendingParts: (requestId: string, note?: string) => Promise<void>;
+  resumeRepair: (requestId: string) => Promise<void>;
+  startRepair: (requestId: string) => Promise<void>;
+  completeRepair: (requestId: string, finalNotes?: string) => Promise<void>;
+  closeRepair: (requestId: string) => Promise<void>;
+  cancelRepairRequest: (requestId: string, reason?: string) => Promise<void>;
+  assignMechanic: (requestId: string, mechanicId: string) => Promise<void>;
+  setEstimatedCost: (requestId: string, amount: number) => Promise<void>;
 }
 
 const DashboardContext = createContext<DashboardContextValue | null>(null);
 
 export function DashboardProvider({ children }: { children: ReactNode }) {
-  const [users, setUsers] = useState<User[]>(USERS);
-  const [equipment, setEquipment] = useState<Equipment[]>(EQUIPMENT);
-  const [repairRequests, setRepairRequests] = useState<RepairRequest[]>(REPAIR_REQUESTS);
-  const [notifications, setNotifications] = useState<Notification[]>(NOTIFICATIONS);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [authReady, setAuthReady] = useState(false);
 
-  const [currentUserId, setCurrentUserId] = useState<string | null>(() => {
-    try {
-      return sessionStorage.getItem(SESSION_STORAGE_KEY);
-    } catch {
-      return null;
+  const [equipment, setEquipment] = useState<Equipment[]>([]);
+  const [equipmentLoading, setEquipmentLoading] = useState(false);
+
+  const [repairRequests, setRepairRequests] = useState<RepairRequest[]>([]);
+  const [repairRequestsLoading, setRepairRequestsLoading] = useState(false);
+
+  const [approvalQueue, setApprovalQueue] = useState<RepairRequest[]>([]);
+  const [approvalQueueLoading, setApprovalQueueLoading] = useState(false);
+
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+
+  const [users, setUsers] = useState<User[]>([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+
+  // Bumped on every dismissal so the derived alert list below recomputes —
+  // the dismissal itself lives in localStorage, which React doesn't watch.
+  const [maintenanceAlertsTick, setMaintenanceAlertsTick] = useState(0);
+
+  // On mount, try to silently restore a session from the stored refresh
+  // token — this is what lets a page reload keep the user signed in.
+  useEffect(() => {
+    let cancelled = false;
+
+    async function restore() {
+      if (!getRefreshToken()) {
+        setAuthReady(true);
+        return;
+      }
+      const refreshed = await refreshAccessToken();
+      if (cancelled) return;
+      if (!refreshed) {
+        clearTokens();
+        setAuthReady(true);
+        return;
+      }
+      try {
+        const user = await apiMe();
+        if (!cancelled) setCurrentUser(user);
+      } catch {
+        clearTokens();
+      } finally {
+        if (!cancelled) setAuthReady(true);
+      }
     }
-  });
 
-  const currentUser = useMemo(() => users.find((u) => u.id === currentUserId) ?? null, [users, currentUserId]);
-
-  const notify = useCallback((recipientUserId: string, message: string, relatedRequestId?: string) => {
-    if (!recipientUserId) return;
-    setNotifications((prev) => [
-      { id: `n-${Date.now().toString(36)}-${recipientUserId}`, message, timestamp: nowIso(), read: false, recipientUserId, relatedRequestId },
-      ...prev,
-    ]);
+    restore();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const login = useCallback(
-    (email: string): { ok: true } | { ok: false; error: string } => {
-      const match = users.find((u) => u.email.toLowerCase() === email.trim().toLowerCase());
-      if (!match) {
-        return { ok: false, error: "No account found for that email." };
+  const refreshEquipment = useCallback(async () => {
+    setEquipmentLoading(true);
+    try {
+      setEquipment(await listEquipment());
+    } finally {
+      setEquipmentLoading(false);
+    }
+  }, []);
+
+  const refreshRepairRequests = useCallback(async () => {
+    setRepairRequestsLoading(true);
+    try {
+      setRepairRequests(await listRepairRequests());
+    } finally {
+      setRepairRequestsLoading(false);
+    }
+  }, []);
+
+  const refreshApprovalQueue = useCallback(async () => {
+    setApprovalQueueLoading(true);
+    try {
+      setApprovalQueue(await getApprovalQueue());
+    } finally {
+      setApprovalQueueLoading(false);
+    }
+  }, []);
+
+  const refreshNotifications = useCallback(async () => {
+    setNotificationsLoading(true);
+    try {
+      setNotifications(await listNotifications());
+    } finally {
+      setNotificationsLoading(false);
+    }
+  }, []);
+
+  const refreshUsers = useCallback(async () => {
+    setUsersLoading(true);
+    try {
+      setUsers(await listUsers());
+    } catch (err) {
+      // Listing users may be restricted to admins — every other role simply
+      // can't resolve "who reported this" to a name and falls back to
+      // showing the raw id, rather than breaking the page.
+      if (err instanceof ApiError && (err.status === 403 || err.status === 401)) {
+        setUsers([]);
+      } else {
+        throw err;
       }
-      if (match.status !== "Active") {
-        return { ok: false, error: "This account hasn't completed setup yet. Check your invite email." };
-      }
-      setCurrentUserId(match.id);
-      try {
-        sessionStorage.setItem(SESSION_STORAGE_KEY, match.id);
-      } catch {
-        // Private browsing / storage disabled — session just won't survive a refresh.
-      }
-      return { ok: true };
-    },
-    [users],
+    } finally {
+      setUsersLoading(false);
+    }
+  }, []);
+
+  /** Fetches one request's full detail and replaces (or inserts) it in the shared list by id. */
+  const loadRepairRequestDetail = useCallback(async (requestId: string): Promise<RepairRequest> => {
+    const detail = await getRepairRequest(requestId);
+    setRepairRequests((prev) => {
+      const exists = prev.some((rr) => rr.id === detail.id);
+      return exists ? prev.map((rr) => (rr.id === detail.id ? detail : rr)) : [detail, ...prev];
+    });
+    return detail;
+  }, []);
+
+  const maintenanceAlerts = useMemo(
+    () => getDueMaintenanceAlerts(equipment),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [equipment, maintenanceAlertsTick],
   );
+
+  const dismissMaintenanceAlert = useCallback((alert: MaintenanceAlert) => {
+    dismissMaintenanceAlertStorage(alert);
+    setMaintenanceAlertsTick((tick) => tick + 1);
+  }, []);
+
+  // Once signed in, load everything the dashboard needs. A fresh login and
+  // a restored session both land here via the currentUser change.
+  useEffect(() => {
+    if (!currentUser) return;
+    refreshEquipment();
+    refreshRepairRequests();
+    refreshUsers();
+    refreshNotifications();
+  }, [currentUser, refreshEquipment, refreshRepairRequests, refreshUsers, refreshNotifications]);
+
+  const login = useCallback(async (email: string, password: string): Promise<{ ok: true } | { ok: false; error: string }> => {
+    try {
+      const user = await apiLogin(email, password);
+      setCurrentUser(user);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: getErrorMessage(err) };
+    }
+  }, []);
 
   const logout = useCallback(() => {
-    setCurrentUserId(null);
+    clearTokens();
+    setCurrentUser(null);
+    setEquipment([]);
+    setRepairRequests([]);
+    setApprovalQueue([]);
+    setNotifications([]);
+    setUsers([]);
+  }, []);
+
+  const addEquipment = useCallback(async (input: EquipmentInput): Promise<Equipment | { error: string }> => {
     try {
-      sessionStorage.removeItem(SESSION_STORAGE_KEY);
-    } catch {
-      // Nothing to clean up if storage was never written to.
+      const created = await createEquipment(input);
+      setEquipment((prev) => [...prev, created]);
+      return created;
+    } catch (err) {
+      return { error: getErrorMessage(err) };
     }
   }, []);
 
-  const submitFaultReport = useCallback(
-    (input: FaultReportInput, reporter: User): RepairRequest => {
-      const equipmentItem = equipment.find((eq) => eq.id === input.equipmentId);
-      const supervisor = equipmentItem ? getSupervisorForSite(users, equipmentItem.site) : undefined;
+  const addUser = useCallback(async (input: UserCreateInput): Promise<User | { error: string }> => {
+    try {
+      const created = await createUser(input);
+      setUsers((prev) => [...prev, created]);
+      return created;
+    } catch (err) {
+      return { error: getErrorMessage(err) };
+    }
+  }, []);
 
-      const newRequest: RepairRequest = {
-        id: generateNextRequestId(repairRequests),
-        equipmentId: input.equipmentId,
-        faultType: input.faultType,
-        priority: input.priority,
-        status: "Pending Supervisor Approval",
-        faultDescription: input.faultDescription,
-        faultReportedBy: reporter.name,
-        faultDetectedBy: input.faultDetectedBy.trim() || reporter.name,
-        repairRecommendation: input.repairRecommendation,
-        reportedAt: input.reportedAt,
-        reportedByUserId: reporter.id,
-        assignedSupervisorId: supervisor?.id ?? "",
-        supervisorApproval: null,
-        mdApproval: null,
-        repairActions: [],
-        estimatedCost: input.estimatedCost,
-        completedAt: null,
-      };
-
-      setRepairRequests((prev) => [newRequest, ...prev]);
-
-      if (supervisor) {
-        notify(supervisor.id, `New fault reported: ${newRequest.id} is awaiting your approval.`, newRequest.id);
-      }
-
-      return newRequest;
-    },
-    [equipment, repairRequests, users, notify],
-  );
+  const submitFaultReport = useCallback(async (input: FaultReportInput): Promise<RepairRequest | { error: string }> => {
+    try {
+      const created = await createRepairRequest(input);
+      setRepairRequests((prev) => [created, ...prev]);
+      return created;
+    } catch (err) {
+      return { error: getErrorMessage(err) };
+    }
+  }, []);
 
   const decideSupervisor = useCallback(
-    (requestId: string, decision: ApprovalDecision, comment: string, supervisor: User) => {
-      setRepairRequests((prev) =>
-        prev.map((rr) => {
-          if (rr.id !== requestId) return rr;
-          return {
-            ...rr,
-            status: decision === "Approved" ? "Pending MD Approval" : "Rejected / Returned",
-            supervisorApproval: {
-              userId: supervisor.id,
-              userName: supervisor.name,
-              role: "supervisor",
-              decision,
-              comment,
-              timestamp: nowIso(),
-            },
-          };
-        }),
-      );
-
-      const request = repairRequests.find((rr) => rr.id === requestId);
-      if (!request) return;
-
-      if (decision === "Approved") {
-        const md = users.find((u) => u.role === "md");
-        if (md) {
-          const urgency = request.priority === "Critical" ? " — marked Critical." : ".";
-          notify(md.id, `${requestId} is awaiting your final approval${urgency}`, requestId);
-        }
-      } else {
-        notify(
-          request.reportedByUserId,
-          decision === "Rejected / Returned"
-            ? `Your report ${requestId} was returned by ${supervisor.name}: "${comment}"`
-            : `Supervisor ${supervisor.name} requested more information on ${requestId}: "${comment}"`,
-          requestId,
-        );
-      }
+    async (requestId: string, decision: ApprovalDecision, comment: string) => {
+      await decideAsSupervisor(requestId, decision, comment);
+      await Promise.all([loadRepairRequestDetail(requestId), refreshApprovalQueue()]);
     },
-    [repairRequests, users, notify],
+    [loadRepairRequestDetail, refreshApprovalQueue],
   );
 
   const decideMd = useCallback(
-    (requestId: string, decision: ApprovalDecision, comment: string, md: User) => {
-      setRepairRequests((prev) =>
-        prev.map((rr) => {
-          if (rr.id !== requestId) return rr;
-          return {
-            ...rr,
-            status: decision === "Approved" ? "Repair In Progress" : "Rejected / Returned",
-            mdApproval: {
-              userId: md.id,
-              userName: md.name,
-              role: "md",
-              decision,
-              comment,
-              timestamp: nowIso(),
-            },
-          };
-        }),
-      );
-
-      const request = repairRequests.find((rr) => rr.id === requestId);
-      if (!request) return;
-
-      if (decision === "Approved") {
-        setEquipment((prev) =>
-          prev.map((eq) =>
-            eq.id === request.equipmentId && eq.status !== "Out of Service" ? { ...eq, status: "Under Maintenance" } : eq,
-          ),
-        );
-        notify(request.reportedByUserId, `${requestId} has final approval — you're clear to begin the repair.`, requestId);
-      } else {
-        notify(
-          request.reportedByUserId,
-          decision === "Rejected / Returned"
-            ? `Your report ${requestId} was returned by ${md.name}: "${comment}"`
-            : `MD ${md.name} requested more information on ${requestId}: "${comment}"`,
-          requestId,
-        );
-      }
+    async (requestId: string, decision: ApprovalDecision, comment: string) => {
+      await decideAsMd(requestId, decision, comment);
+      await Promise.all([loadRepairRequestDetail(requestId), refreshApprovalQueue()]);
     },
-    [repairRequests, notify],
+    [loadRepairRequestDetail, refreshApprovalQueue],
   );
 
   const addRepairAction = useCallback(
-    (requestId: string, input: RepairActionInput, performedBy: User) => {
-      const partsCost = input.quantity && input.unitCost ? input.quantity * input.unitCost : 0;
-      const totalCost = partsCost + (input.labourCost ?? 0);
-
-      const action: Omit<RepairAction, "id"> = {
-        date: input.date,
-        action: input.action,
-        partsUsed: input.partsUsed,
-        quantity: input.quantity,
-        unitCost: input.unitCost,
-        labourCost: input.labourCost,
-        totalCost,
-        performedBy: performedBy.name,
-        notes: input.notes,
-      };
-
-      setRepairRequests((prev) =>
-        prev.map((rr) => {
-          if (rr.id !== requestId) return rr;
-          return { ...rr, repairActions: [...rr.repairActions, { ...action, id: nextActionId(rr.repairActions) }] };
-        }),
-      );
-
-      const request = repairRequests.find((rr) => rr.id === requestId);
-      if (request && totalCost > 0) {
-        setEquipment((prev) =>
-          prev.map((eq) =>
-            eq.id === request.equipmentId ? { ...eq, totalMaintenanceCost: eq.totalMaintenanceCost + totalCost } : eq,
-          ),
-        );
-      }
+    async (requestId: string, input: RepairActionInput) => {
+      await apiAddRepairAction(requestId, input);
+      await loadRepairRequestDetail(requestId);
     },
-    [repairRequests],
+    [loadRepairRequestDetail],
   );
 
-  const setPendingParts = useCallback((requestId: string) => {
-    setRepairRequests((prev) =>
-      prev.map((rr) => (rr.id === requestId && rr.status === "Repair In Progress" ? { ...rr, status: "Pending Parts" } : rr)),
-    );
-  }, []);
-
-  const resumeRepair = useCallback((requestId: string) => {
-    setRepairRequests((prev) =>
-      prev.map((rr) => (rr.id === requestId && rr.status === "Pending Parts" ? { ...rr, status: "Repair In Progress" } : rr)),
-    );
-  }, []);
-
-  const markCompleted = useCallback(
-    (requestId: string) => {
-      const completedAt = nowIso();
-      setRepairRequests((prev) =>
-        prev.map((rr) => (rr.id === requestId ? { ...rr, status: "Repair Completed", completedAt } : rr)),
-      );
-
-      const request = repairRequests.find((rr) => rr.id === requestId);
-      if (!request) return;
-
-      setEquipment((prev) =>
-        prev.map((eq) =>
-          eq.id === request.equipmentId
-            ? { ...eq, status: "Operational", lastMaintenanceDate: completedAt.slice(0, 10) }
-            : eq,
-        ),
-      );
-
-      const recipients = new Set<string>([request.assignedSupervisorId, ...users.filter((u) => u.role === "admin").map((u) => u.id)]);
-      recipients.forEach((id) => notify(id, `${requestId} has been marked completed.`, requestId));
+  const setPendingParts = useCallback(
+    async (requestId: string, note?: string) => {
+      await apiSetPendingParts(requestId, note);
+      await loadRepairRequestDetail(requestId);
     },
-    [repairRequests, users, notify],
+    [loadRepairRequestDetail],
   );
 
-  const markNotificationRead = useCallback((id: string) => {
-    setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
-  }, []);
-
-  const addUser = useCallback(
-    (input: AddUserInput): AddUserResult | { error: string } => {
-      const name = input.name.trim();
-      const email = input.email.trim().toLowerCase();
-
-      if (!name || !email) return { error: "Name and email are required." };
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { error: "Enter a valid email address." };
-      if (users.some((u) => u.email.toLowerCase() === email)) return { error: "A user with this email already exists." };
-
-      const newUser: User = {
-        id: `u-${crypto.randomUUID().slice(0, 8)}`,
-        name,
-        email,
-        role: input.role,
-        site: input.site,
-        avatarInitials: name
-          .split(" ")
-          .map((part) => part[0])
-          .slice(0, 2)
-          .join("")
-          .toUpperCase(),
-        status: "Invited",
-      };
-
-      // TODO(backend): the server creates the account, issues a real one-time
-      // token, and emails the invite link — a password is never generated or
-      // seen by an admin, even here.
-      const inviteLink = `https://mfventures.com/dashboard/accept-invite?token=${crypto.randomUUID().split("-")[0]}`;
-
-      setUsers((prev) => [...prev, newUser]);
-      return { user: newUser, inviteLink };
+  const resumeRepair = useCallback(
+    async (requestId: string) => {
+      await apiResumeRepair(requestId);
+      await loadRepairRequestDetail(requestId);
     },
-    [users],
+    [loadRepairRequestDetail],
   );
 
-  const addEquipment = useCallback((input: EquipmentInput): Equipment | { error: string } => {
-    const name = input.name.trim();
-    const site = input.site.trim();
+  const startRepair = useCallback(
+    async (requestId: string) => {
+      await apiStartRepair(requestId);
+      await loadRepairRequestDetail(requestId);
+    },
+    [loadRepairRequestDetail],
+  );
 
-    if (!name) return { error: "Equipment name is required." };
-    if (!site) return { error: "Location / Site is required." };
+  const completeRepair = useCallback(
+    async (requestId: string, finalNotes?: string) => {
+      await apiCompleteRepair(requestId, finalNotes);
+      await loadRepairRequestDetail(requestId);
+    },
+    [loadRepairRequestDetail],
+  );
 
-    const newEquipment: Equipment = {
-      id: `eq-${crypto.randomUUID().slice(0, 8)}`,
-      name,
-      // Not collected by this quick-add form — editable later once the
-      // Equipment profile supports it; everything else here is required
-      // for the record to behave like the rest of the fleet (routing,
-      // cost tracking, status).
-      type: "General Equipment",
-      registrationNumber: input.registrationNumber.trim() || "N/A",
-      serialNumber: input.serialNumber.trim() || "N/A",
-      modelNumber: input.modelNumber.trim() || "N/A",
-      location: site,
-      site,
-      status: "Operational",
-      lastMaintenanceDate: null,
-      nextMaintenanceDate: null,
-      totalMaintenanceCost: 0,
-    };
+  const closeRepair = useCallback(
+    async (requestId: string) => {
+      await apiCloseRepair(requestId);
+      await loadRepairRequestDetail(requestId);
+    },
+    [loadRepairRequestDetail],
+  );
 
-    setEquipment((prev) => [...prev, newEquipment]);
-    return newEquipment;
+  const cancelRepairRequest = useCallback(
+    async (requestId: string, reason?: string) => {
+      await apiCancelRepairRequest(requestId, reason);
+      await loadRepairRequestDetail(requestId);
+    },
+    [loadRepairRequestDetail],
+  );
+
+  const assignMechanic = useCallback(
+    async (requestId: string, mechanicId: string) => {
+      await apiAssignMechanic(requestId, mechanicId);
+      await loadRepairRequestDetail(requestId);
+    },
+    [loadRepairRequestDetail],
+  );
+
+  const setEstimatedCost = useCallback(
+    async (requestId: string, amount: number) => {
+      await apiSetEstimatedCost(requestId, amount);
+      await loadRepairRequestDetail(requestId);
+    },
+    [loadRepairRequestDetail],
+  );
+
+  const markNotificationRead = useCallback(async (id: string) => {
+    setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)));
+    try {
+      await apiMarkNotificationRead(id);
+    } catch {
+      // Best-effort — the bell will show the true state again on next refresh.
+    }
   }, []);
 
   const value = useMemo<DashboardContextValue>(
     () => ({
       currentUser,
+      authReady,
       login,
       logout,
       equipment,
+      equipmentLoading,
+      refreshEquipment,
       repairRequests,
+      repairRequestsLoading,
+      refreshRepairRequests,
+      loadRepairRequestDetail,
+      approvalQueue,
+      approvalQueueLoading,
+      refreshApprovalQueue,
       notifications,
+      notificationsLoading,
+      refreshNotifications,
+      markNotificationRead,
       users,
+      usersLoading,
+      refreshUsers,
+      maintenanceAlerts,
+      dismissMaintenanceAlert,
+      addEquipment,
+      addUser,
       submitFaultReport,
       decideSupervisor,
       decideMd,
       addRepairAction,
       setPendingParts,
       resumeRepair,
-      markCompleted,
-      markNotificationRead,
-      addUser,
-      addEquipment,
+      startRepair,
+      completeRepair,
+      closeRepair,
+      cancelRepairRequest,
+      assignMechanic,
+      setEstimatedCost,
     }),
     [
       currentUser,
+      authReady,
       login,
       logout,
       equipment,
+      equipmentLoading,
+      refreshEquipment,
       repairRequests,
+      repairRequestsLoading,
+      refreshRepairRequests,
+      loadRepairRequestDetail,
+      approvalQueue,
+      approvalQueueLoading,
+      refreshApprovalQueue,
       notifications,
+      notificationsLoading,
+      refreshNotifications,
+      markNotificationRead,
       users,
+      usersLoading,
+      refreshUsers,
+      maintenanceAlerts,
+      dismissMaintenanceAlert,
+      addEquipment,
+      addUser,
       submitFaultReport,
       decideSupervisor,
       decideMd,
       addRepairAction,
       setPendingParts,
       resumeRepair,
-      markCompleted,
-      markNotificationRead,
-      addUser,
-      addEquipment,
+      startRepair,
+      completeRepair,
+      closeRepair,
+      cancelRepairRequest,
+      assignMechanic,
+      setEstimatedCost,
     ],
   );
 
@@ -434,42 +482,80 @@ function useDashboardContext(): DashboardContextValue {
 }
 
 export function useDashboardSession() {
-  const { currentUser, login, logout } = useDashboardContext();
-  return { user: currentUser, login, logout };
+  const { currentUser, authReady, login, logout } = useDashboardContext();
+  return { user: currentUser, authReady, login, logout };
 }
 
 export function useDashboardData() {
   const {
     equipment,
+    equipmentLoading,
+    refreshEquipment,
     repairRequests,
+    repairRequestsLoading,
+    refreshRepairRequests,
+    loadRepairRequestDetail,
+    approvalQueue,
+    approvalQueueLoading,
+    refreshApprovalQueue,
     notifications,
+    notificationsLoading,
+    refreshNotifications,
+    markNotificationRead,
     users,
+    usersLoading,
+    refreshUsers,
+    maintenanceAlerts,
+    dismissMaintenanceAlert,
+    addEquipment,
+    addUser,
     submitFaultReport,
     decideSupervisor,
     decideMd,
     addRepairAction,
     setPendingParts,
     resumeRepair,
-    markCompleted,
-    markNotificationRead,
-    addUser,
-    addEquipment,
+    startRepair,
+    completeRepair,
+    closeRepair,
+    cancelRepairRequest,
+    assignMechanic,
+    setEstimatedCost,
   } = useDashboardContext();
 
   return {
     equipment,
+    equipmentLoading,
+    refreshEquipment,
     repairRequests,
+    repairRequestsLoading,
+    refreshRepairRequests,
+    loadRepairRequestDetail,
+    approvalQueue,
+    approvalQueueLoading,
+    refreshApprovalQueue,
     notifications,
+    notificationsLoading,
+    refreshNotifications,
+    markNotificationRead,
     users,
+    usersLoading,
+    refreshUsers,
+    maintenanceAlerts,
+    dismissMaintenanceAlert,
+    addEquipment,
+    addUser,
     submitFaultReport,
     decideSupervisor,
     decideMd,
     addRepairAction,
     setPendingParts,
     resumeRepair,
-    markCompleted,
-    markNotificationRead,
-    addUser,
-    addEquipment,
+    startRepair,
+    completeRepair,
+    closeRepair,
+    cancelRepairRequest,
+    assignMechanic,
+    setEstimatedCost,
   };
 }
