@@ -1,7 +1,7 @@
 import { Section } from "@/components/ui";
 import logoSeplat from "@/assets/images/logo-seplat.svg";
 import logoChevron from "@/assets/images/logo-chevron.svg";
-import logoTotalEnergies from "@/assets/images/logo-totalenergies.png";
+import logoTotalEnergies from "@/assets/images/logo-totalenergies.svg";
 import logoShell from "@/assets/images/logo-shell.svg";
 
 const LOGOS = [

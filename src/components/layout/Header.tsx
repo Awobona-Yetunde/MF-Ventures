@@ -20,8 +20,6 @@ export function Header() {
   const canFloat = HERO_ROUTES.includes(pathname);
   const isTransparent = canFloat && !scrolled && !isOpen;
 
-  // Track scroll position so the header can switch from a transparent
-  // overlay (over the hero photo) to a solid bar once the page scrolls.
   useEffect(() => {
     if (!canFloat) return;
 

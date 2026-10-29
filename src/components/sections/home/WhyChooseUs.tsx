@@ -42,12 +42,7 @@ const REASONS: Reason[] = [
   },
 ];
 
-// Explicit grid placement (rather than two independently-stacked columns)
-// so Reason 01/02 share row 1, 03/04 share row 2, and the grid's default
-// stretch behaviour makes every card in a row match the row's tallest card
-// — that's what keeps the sizes even regardless of how long each blurb is.
-// The highlighted card spans both rows, so its height always matches the
-// combined height of the other two columns.
+
 const GRID_PLACEMENT = [
   "md:col-start-1 md:row-start-1",
   "md:col-start-2 md:row-start-1",
@@ -90,7 +85,14 @@ function ReasonCard({ reason }: { reason: Reason }) {
       <p className={cn("text-xs font-bold", reason.highlight ? "text-white/60" : "text-brand-blue")}>
         {reason.number}
       </p>
-      <h3 className="mt-2 text-sm font-bold tracking-wide uppercase">{reason.title}</h3>
+      <h3
+        className={cn(
+          "mt-2 text-sm font-bold tracking-wide uppercase",
+          reason.highlight ? "text-orange-500" : "text-ink",
+        )}
+      >
+        {reason.title}
+      </h3>
       <p className={cn("mt-3 text-sm leading-relaxed", reason.highlight ? "text-white/75" : "text-muted")}>
         {reason.description}
       </p>

@@ -8,6 +8,7 @@ import Contact from "@/pages/Contact";
 import Login from "@/pages/Login";
 import PrivacyPolicy from "@/pages/PrivacyPolicy";
 import NotFound from "@/pages/NotFound";
+import EngineeringSupport from "@/pages/services/EngineeringSupport";
 
 import { DashboardProvider } from "@/dashboard/state/DashboardProvider";
 import { RequireAuth, RequireRole } from "@/dashboard/state/guards";
@@ -46,6 +47,10 @@ export default function App() {
           <Route path="about" element={<About />} />
           <Route path="services" element={<Services />} />
           <Route path="services/:slug" element={<Services />} />
+          <Route
+            path="/services/engineering-support"
+            element={<EngineeringSupport />}
+          />
           <Route path="contact" element={<Contact />} />
           <Route path="login" element={<Login />} />
           <Route path="privacy-policy" element={<PrivacyPolicy />} />
@@ -70,9 +75,15 @@ export default function App() {
           >
             <Route index element={<DashboardHome />} />
             <Route path="equipment" element={<EquipmentList />} />
-            <Route path="equipment/:equipmentId" element={<EquipmentProfile />} />
+            <Route
+              path="equipment/:equipmentId"
+              element={<EquipmentProfile />}
+            />
             <Route path="repair-requests" element={<RepairRequestsList />} />
-            <Route path="repair-requests/:requestId" element={<RepairRequestDetail />} />
+            <Route
+              path="repair-requests/:requestId"
+              element={<RepairRequestDetail />}
+            />
             <Route
               path="report-fault"
               element={

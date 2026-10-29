@@ -16,8 +16,14 @@ export const NAV_LINKS: NavLink[] = [
 export const HERO_ROUTES = ["/", "/about", "/contact"];
 
 export const SERVICE_LINKS: NavLink[] = [
-  { label: "Mechanical Solutions & Engineering", href: "/services/mechanical-engineering" },
-  { label: "Civil Engineering & Infrastructure", href: "/services/civil-infrastructure" },
-  { label: "Oil & Gas Procurement Support", href: "/services/procurement-support" },
-  { label: "General Contracts & Trading", href: "/services/contracts-trading" },
+  {
+    label: "Engineering Support",
+    href: "/services/engineering-support",
+  },
+  {
+    label: "Security Support",
+    href: "/services/security-support",
+  },
+  { label: "Procurement Services", href: "/services/procurement-support" },
+  
 ];
