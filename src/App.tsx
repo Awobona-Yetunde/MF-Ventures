@@ -9,6 +9,8 @@ import Login from "@/pages/Login";
 import PrivacyPolicy from "@/pages/PrivacyPolicy";
 import NotFound from "@/pages/NotFound";
 import EngineeringSupport from "@/pages/services/EngineeringSupport";
+import SecuritySupport from "@/pages/services/SecuritySupport";
+import ProcurementSupport from "@/pages/services/ProcurementSupport";
 
 import { DashboardProvider } from "@/dashboard/state/DashboardProvider";
 import { RequireAuth, RequireRole } from "@/dashboard/state/guards";
@@ -51,17 +53,21 @@ export default function App() {
             path="/services/engineering-support"
             element={<EngineeringSupport />}
           />
+          <Route
+            path="/services/security-support"
+            element={<SecuritySupport />}
+          />
+          <Route
+            path="/services/procurement-support"
+            element={<ProcurementSupport />}
+         />
           <Route path="contact" element={<Contact />} />
           <Route path="login" element={<Login />} />
           <Route path="privacy-policy" element={<PrivacyPolicy />} />
           <Route path="*" element={<NotFound />} />
         </Route>
 
-        {/* Internal dashboard — Digital Equipment Maintenance & Approval System.
-            DashboardProvider wires every screen under here to the real backend
-            API (see src/dashboard/api/), so an approval, a new fault report, or
-            a logged repair action shows up everywhere else as soon as it's
-            fetched again from the server. */}
+        
         <Route element={<DashboardScope />}>
           <Route path="dashboard/login" element={<DashboardLogin />} />
 
